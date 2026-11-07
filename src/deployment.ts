@@ -58,10 +58,14 @@ export interface Deployment extends Machine {
 }
 export interface FeishuBot { cli: string; appId: string; brand: 'feishu' | 'lark'; botId: string; name: string }
 
+/** Windows starts only an executable image, and a command name without an extension gets `.exe` appended by CreateProcess; npm's Windows shims are extensionless shell scripts or `.cmd` files that `spawn` cannot start. */
+const extensionless = (name: string): boolean => !/\.[^\\/]+$/.test(name)
 /** Resolve a command name or absolute path to an executable file, ignoring the worker shim directory. */
 export function executable(name: string, path: string, exclude?: string): string {
   if (name.includes('/') && !isAbsolute(name)) throw new Error(`${name} must be a command name or an absolute path`)
-  const candidates = isAbsolute(name) ? [name] : path.split(delimiter).filter(dir => isAbsolute(dir) && !(exclude && sameDirectory(dir, exclude))).map(dir => join(dir, name))
+  const bases = isAbsolute(name) ? [name] : path.split(delimiter).filter(dir => isAbsolute(dir) && !(exclude && sameDirectory(dir, exclude))).map(dir => join(dir, name))
+  // Try `<name>.exe` first on Windows so a command name such as `lark-cli` means the real binary rather than npm's non-executable shim.
+  const candidates = process.platform === 'win32' && extensionless(name) ? bases.flatMap(base => [`${base}.exe`, base]) : bases
   for (const candidate of candidates) {
     try { if (statSync(candidate).isFile()) { accessSync(candidate, constants.X_OK); return candidate } }
     catch { /* Not an executable file here; try the next PATH directory. */ }
