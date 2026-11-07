@@ -9,12 +9,18 @@ import type { Store } from '../store.ts'
 import { reportRelay, threadFollowedNotice } from '../notices.ts'
 import type { Sessions } from '../sessions.ts'
 import { AcknowledgementSchema, readTool, tool, type Tool } from './tool.ts'
+import type { Effects } from '../effects.ts'
+
+/** How long the main Session gets to deliver a worker's answer before dsh-superagent delivers it itself. */
+const ANSWER_FALLBACK_MS = 90_000
 
 export interface ExecutorToolsHost {
   readonly engine: Pick<EngineForExecutor, 'report' | 'reply' | 'markUnrelated' | 'handback' | 'followForContext'>
   readonly store: Pick<Store, 'tickets' | 'replyStatus' | 'atomic'>
   readonly sessions: Pick<Sessions, 'relay' | 'notify'>
   readonly resources: ResourceHost
+  /** Queues the fallback that delivers this answer if the main Session does not. */
+  readonly effects: Pick<Effects, 'enqueue'>
   /** GitHub Source context whose pull-request rules govern claiming a reported PR. */
   readonly github: SourceContext
   sendReplies(): Promise<void>
@@ -96,6 +102,9 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
           const updated = host.engine.report(ticketId, report)
           const relay = reportRelay(updated, report)
           if (relay) host.sessions.relay(relay.id, relay.text)
+          // The main Session owns delivering a worker's answer; if it has not by the time the fallback falls due, deliver
+          // the worker's own text so the person is never left without the answer it was promised.
+          if (report.answers) host.effects.enqueue('answerFallback', report.answers, { ticketId, triggerId: report.answers, text: args.summary }, { after: ANSWER_FALLBACK_MS })
           const notification = relay ? 'orchestrator' : 'internal_only'
           return { reported: true, notification, ...(updated.attention ? { attention: updated.attention } : {}) }
         })

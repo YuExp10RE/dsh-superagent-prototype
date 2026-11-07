@@ -21,6 +21,11 @@ export interface EffectPayloads {
   notice: { value: Record<string, unknown>; summary: string }
   /** Send a message for a Channel through its Source; the key is the message ID, whose receipt the Outbox keeps. */
   reply: Record<string, never>
+  /**
+   * Deliver a worker's answer when the main Session has not delivered it by the time this effect falls due; the key is the
+   * human question's trigger ID. A no-op once that answer's permission is consumed.
+   */
+  answerFallback: { ticketId: string; triggerId: string; text: string }
 }
 export type EffectKind = keyof EffectPayloads
 interface Handler<K extends EffectKind> {
@@ -57,11 +62,11 @@ export class Effects {
   constructor(private readonly store: Store, private readonly board: Pick<HealthBoard, 'claim'>, private readonly now = () => Date.now()) {
     this.seq = Number(store.db.prepare('SELECT IFNULL(MAX(seq), 0) AS seq FROM effect').get()?.seq ?? 0)
   }
-  /** Upserts an effect in the caller's transaction, coalescing with any waiting row of the same kind and key while keeping its queue position. */
-  enqueue<K extends EffectKind>(kind: K, key: string, payload: EffectPayloads[K]): void {
+  /** Upserts an effect in the caller's transaction, coalescing with any waiting row of the same kind and key while keeping its queue position; `after` delays it by that many milliseconds. */
+  enqueue<K extends EffectKind>(kind: K, key: string, payload: EffectPayloads[K], options: { after?: number } = {}): void {
     this.store.db.prepare(`INSERT INTO effect (kind, key, value, seq, due, since) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(kind, key) DO UPDATE
       SET value = excluded.value, generation = generation + 1, attempts = 0, error = '', due = excluded.due`)
-      .run(kind, key, JSON.stringify(payload), ++this.seq, this.now(), new Date(this.now()).toISOString())
+      .run(kind, key, JSON.stringify(payload), ++this.seq, this.now() + (options.after ?? 0), new Date(this.now()).toISOString())
     this.kick()
   }
   handle<K extends EffectKind>(kind: K, run: Handler<K>['run'], options: Options<K> = {}): void {

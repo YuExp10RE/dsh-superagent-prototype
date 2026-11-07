@@ -43,6 +43,7 @@ const TEXT = {
   'health.relay': ['转达给主 Session 的消息', 'Relays to the main Session'],
   'health.notice': ['给主 Session 的通知', 'Notices to the main Session'],
   'health.reply': ['发往渠道的消息', 'Messages to Channels'],
+  'health.answerFallback': ['主 Session 漏发时的兜底回复', 'Answers delivered when the main Session does not'],
   'health.worker': ['执行器事件处理', 'Executor event handling'],
   'health.evals': ['未完成的评估', 'Unavailable Evals'],
   none: ['暂无。', 'None.'],

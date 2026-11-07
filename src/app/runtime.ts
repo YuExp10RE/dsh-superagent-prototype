@@ -13,7 +13,7 @@ import type {} from '@deepseek-ai/dsh-subprocess'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { lockSync } from 'proper-lockfile'
-import { Engine, key, reasonText, type EngineForSettings, type ReceiveResult, type Ticket, type Trigger } from '../core/index.ts'
+import { Engine, key, liveTicket, reasonText, type EngineForSettings, type ReceiveResult, type Ticket, type Trigger } from '../core/index.ts'
 import { allowedSender, settingsPolicy } from '../policy.ts'
 import { SourceRegistry } from '../sources/registry.ts'
 import { Commands } from '../infra/commands.ts'
@@ -159,10 +159,24 @@ export class Runtime extends Service implements SourceHost {
       this.sourceDeps = { store, engine, outbox, commands, sources, get ready() { return runtime.ready },
         get deployment() { return setup.deployment }, configured: () => setup.configured(),
         get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem }, receive: trigger => passes.receive(trigger) }
-      this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
+      this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources, effects,
         get github() { return runtime.context({ kind: 'github', health: ['github'] }) },
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
+      // The main Session owns delivering a worker's answer. If it has not done so by the time this effect falls due (it can
+      // misjudge the relay, or be busy), deliver the worker's own text through the same reply path so the person who asked
+      // the question still receives an answer. A delivered answer consumes the permission, which makes this a no-op.
+      this.effects.handle('answerFallback', async ({ ticketId, triggerId, text }) => {
+        const ticket = store.tickets.get(ticketId)
+        if (!ticket || !liveTicket(ticket) || !ticket.answers?.includes(triggerId)) return
+        try {
+          engine.reply({ purpose: 'answer', ticketId, triggerId, text: `This is by an automated agent, not a human.\n\n${text}` })
+        } catch (error) {
+          ctx.logger.warn('dsh-superagent could not deliver an answer the main Session left unsent: %s', String(error))
+          return
+        }
+        await outbox.sent()
+      }, { quiet: true, retry: [10_000, 60_000] })
       this.ready = this.initialize()
     } catch (error) {
       // Release the database and state lock if initialization fails so an in-process restart can reacquire them.
